@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES6",
+    "module": "commonjs",
+    "sourceMap": true,
+    "noImplicitAny": false,
+    "strict": false
+  },
+  "files": [
+    "node_modules/@azerion/phaser-nineslice/build/phaser-nineslice.d.ts",
+    "./src/custom.d.ts",
+    "./src/globals.d.ts",
+    "./src/websocket.d.ts"
+  ]
+}
