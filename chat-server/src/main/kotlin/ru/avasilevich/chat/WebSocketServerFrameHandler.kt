@@ -12,7 +12,10 @@ import io.netty.handler.codec.http.websocketx.*
 import org.slf4j.LoggerFactory
 
 
-class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleChannelInboundHandler<Any>() {
+class WebSocketServerFrameHandler(
+    private val chatGroup: ChannelGroup,
+    private val repo: MessageRepository
+) : SimpleChannelInboundHandler<Any>() {
 
     companion object {
         private val log = LoggerFactory.getLogger(WebSocketServerFrameHandler::class.java)
@@ -21,8 +24,6 @@ class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleC
         private const val CLOSE_WITHOUT_FRAME = "close-without-frame"
         private const val SEND_CORRUPTED_FRAME = "send-corrupted-frame"
     }
-
-    var handshaker: WebSocketServerHandshaker? = null
 
     override fun channelActive(ctx: ChannelHandlerContext) {
         log.debug("channel is active")
@@ -34,9 +35,23 @@ class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleC
 
     override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
         if (evt == WebSocketServerProtocolHandler.ServerHandshakeStateEvent.HANDSHAKE_COMPLETE) {
-            println(evt)
-            chatGroup.writeAndFlush("New user!")
+
+            log.debug("new user joined - {}", evt)
+
+            /**
+             * Sending message cache to newcomer
+             */
+            val enterCmd = ChatCommand(
+                command = ChatCommandType.ENTER_CHAT,
+                messages = repo.getCache()
+            )
+            ctx.channel().writeAndFlush(TextWebSocketFrame(enterCmd.toString()))
+
+            /**
+             * Finally adding newcomer to chat lobby
+             */
             chatGroup.add(ctx.channel())
+
         } else {
             super.userEventTriggered(ctx, evt)
         }
@@ -44,14 +59,6 @@ class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleC
 
     override fun channelRead0(ctx: ChannelHandlerContext, msg: Any) {
         when (msg) {
-            is HttpObject -> {
-                System.out.println("WebSocketHandler added to the pipeline")
-                System.out.println("Opened Channel : " + ctx.channel())
-                System.out.println("Handshaking....")
-                //Do the Handshake to upgrade connection from HTTP to WebSocket protocol
-                handleHandshake(ctx, msg as HttpRequest)
-                System.out.println("Handshake is done")
-            }
             is TextWebSocketFrame -> {
                 when (msg.text()) {
                     PING -> ctx.writeAndFlush(PingWebSocketFrame(Unpooled.wrappedBuffer(byteArrayOf(1, 2, 3, 4))))
@@ -60,13 +67,45 @@ class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleC
                     CLOSE_WITHOUT_FRAME -> ctx.close()
                     SEND_CORRUPTED_FRAME -> ctx.writeAndFlush(ContinuationWebSocketFrame(Unpooled.wrappedBuffer(byteArrayOf(1, 2, 3, 4))))
                     else -> {
-                        println(msg.text())
-                        chatGroup.writeAndFlush(msg.retain())
+
+                        log.debug("message received: {}", msg.text())
+
+                        /**
+                         * Welcome for newcomer
+                         */
+                        if (msg.text().contains(ChatCommandType.JOIN.value, true)) {
+                            /**
+                             * Notify all other users about newcomer
+                             */
+                            msg.text()
+                            val chatMsg = ChatMessage(
+                                author = "System",
+                                text = "${msg.text().substringBefore(':')} has joined to Chat."
+                            )
+                            repo.putToCache(chatMsg)
+                            val cmd = ChatCommand(
+                                command = ChatCommandType.MESSAGE,
+                                messages = listOf(chatMsg)
+                            )
+                            chatGroup.writeAndFlush(TextWebSocketFrame(cmd.toString())) { it != ctx.channel() }
+                        } else {
+                            val chatMsg = ChatMessage.from(msg.text())
+                            val chatCmd = ChatCommand(
+                                command = ChatCommandType.MESSAGE,
+                                messages = listOf(chatMsg)
+                            )
+                            repo.putToCache(chatMsg)
+                            chatGroup.writeAndFlush(TextWebSocketFrame(chatCmd.toString()))
+                        }
+
                     }
                 }
             }
             is BinaryWebSocketFrame -> ctx.writeAndFlush(msg.retain())
             is CloseWebSocketFrame -> {
+
+                log.debug("close message received: {}", msg)
+
                 val closeFuture: ChannelFuture = if (msg.statusCode() == 1007) {
                     ctx.writeAndFlush(1008)
                 } else {
@@ -82,25 +121,4 @@ class WebSocketServerFrameHandler(private val chatGroup: ChannelGroup) : SimpleC
         }
     }
 
-    private fun handleHandshake(ctx: ChannelHandlerContext, req: HttpRequest) {
-        val wsFactory = WebSocketServerHandshakerFactory(getWebSocketURL(req), null, true)
-        handshaker = wsFactory.newHandshaker(req)
-        if (handshaker == null) {
-            WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ctx.channel())
-        } else {
-            handshaker?.handshake(ctx.channel(), req)
-        }
-    }
-
-    private fun getWebSocketURL(req: HttpRequest): String {
-        println("Req URI : " + req.uri())
-        val url = "ws://" + req.headers().get("Host") + req.uri()
-        println("Constructed URL : $url")
-        return url
-    }
-
-    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
-        log.error("Exception Caught: " + cause.message)
-        ctx.close()
-    }
 }

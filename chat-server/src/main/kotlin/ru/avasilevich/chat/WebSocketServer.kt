@@ -27,6 +27,7 @@ class WebSocketServer(
         val sslCtx: SslContext? = null
 
         val chatGroup = DefaultChannelGroup(ImmediateEventExecutor.INSTANCE)
+        val messageRepo = MessageRepository()
 
         bossGroup = NioEventLoopGroup()
         workerGroup = NioEventLoopGroup()
@@ -34,7 +35,7 @@ class WebSocketServer(
         val serverBootstrap = ServerBootstrap()
         serverBootstrap.group(bossGroup, workerGroup)
             .channel(NioServerSocketChannel::class.java)
-            .childHandler(WebSocketServerInitializer(chatGroup, sslCtx, subProtocols))
+            .childHandler(WebSocketServerInitializer(chatGroup, messageRepo, sslCtx, subProtocols))
 
         serverBootstrap.bind(host, port).sync()
 
